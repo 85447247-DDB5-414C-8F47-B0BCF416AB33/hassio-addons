@@ -1,5 +1,5 @@
 name: Screenshot to Samsung Frame
-version: "0.1.11"
+version: "0.1.12"
 slug: screenshot-frame
 description: Periodically screenshots a Home Assistant dashboard and serves it for a Samsung Frame TV.
 startup: application
@@ -17,9 +17,6 @@ map:
   - addons:rw
   - backup:rw
   - media:rw
-ports:
-  8200/tcp: 8200
-webui: "http://[HOST]:[PORT:8200]"
 host_network: true
 options:
   target_url: http://homeassistant.local:5000/
@@ -31,7 +28,6 @@ options:
   target_password: ""
   target_headers: ""
   interval_seconds: 300
-  http_port: 8200
   screenshot_width: 1920
   screenshot_height: 1080
   screenshot_zoom: 100
@@ -50,7 +46,6 @@ schema:
   target_password: str?                             # Basic auth password
   target_headers: str?                              # JSON string of custom headers when auth_type=headers
   interval_seconds: int                             # How often to refresh the image
-  http_port: int                                    # Local HTTP port to serve the latest image
   screenshot_width: int                             # Rendered browser width in pixels
   screenshot_height: int                            # Rendered browser height in pixels
   screenshot_zoom: int                              # Zoom percentage (100 = 100%)

@@ -33,7 +33,6 @@ except Exception:
     pass
 
 INTERVAL = int(os.environ.get('INTERVAL_SECONDS', os.environ.get('INTERVAL', 300)))
-HTTP_PORT = int(os.environ.get('HTTP_PORT', 8200))
 SCREENSHOT_WIDTH = int(os.environ.get('SCREENSHOT_WIDTH', '1920'))
 SCREENSHOT_HEIGHT = int(os.environ.get('SCREENSHOT_HEIGHT', '1080'))
 SCREENSHOT_ZOOM = int(os.environ.get('SCREENSHOT_ZOOM', '100'))  # percentage: 100 = 100%, 150 = 150%, etc.
@@ -64,7 +63,6 @@ logger.info(f'Configuration:')
 logger.info(f'  Target URL: {TARGET_URL if TARGET_URL else "NOT SET"}')
 logger.info(f'  Auth Type: {TARGET_AUTH_TYPE}')
 logger.info(f'  Interval: {INTERVAL}s')
-logger.info(f'  HTTP Port: {HTTP_PORT}')
 logger.info(f'  Screenshot: {SCREENSHOT_WIDTH}x{SCREENSHOT_HEIGHT} @ {SCREENSHOT_ZOOM}% zoom')
 logger.info(f'  Art Path: {ART_PATH}')
 logger.info(f'  TV Upload: {"ENABLED" if TV_IP else "DISABLED"}')
@@ -235,7 +233,7 @@ async def render_url_with_pyppeteer(url: str, headers: dict | None = None, timeo
     return screenshot
 
 
-async def screenshot_loop(app):
+async def screenshot_loop():
     logger.info('[LOOP] Screenshot loop started')
     if not TARGET_URL:
         logger.info('[LOOP] WARNING: No TARGET_URL configured; the add-on will not fetch screenshots')
@@ -317,31 +315,11 @@ async def screenshot_loop(app):
         await asyncio.sleep(INTERVAL)
 
 
-async def handle_art(request):
-    if not ART_PATH.exists():
-        raise web.HTTPNotFound()
-    return web.FileResponse(path=str(ART_PATH))
-
-
-async def init_app():
-    app = web.Application()
-    app.router.add_get('/art.jpg', handle_art)
-    return app
-
-
 async def async_main():
-    logger.info('[STARTUP] Initializing HTTP server...')
-    app = await init_app()
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', HTTP_PORT)
-    await site.start()
-    logger.info(f'[STARTUP] ✓ HTTP server running on 0.0.0.0:{HTTP_PORT}')
-    logger.info(f'[STARTUP] Access art at: http://<host>:{HTTP_PORT}/art.jpg')
     logger.info('[STARTUP] Starting screenshot loop...')
 
     loop = asyncio.get_running_loop()
-    screenshot_task = loop.create_task(screenshot_loop(app))
+    screenshot_task = loop.create_task(screenshot_loop())
     try:
         await asyncio.Event().wait()  # run indefinitely until cancelled/interrupt
     finally:
