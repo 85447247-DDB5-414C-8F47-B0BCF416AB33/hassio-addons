@@ -1,15 +1,14 @@
 # Screenshot Frame - Home Assistant Add-on
 
-Render Home Assistant dashboards (or any URL) with Playwright and send screenshots directly to Samsung Frame TV via WebSocket API.
+Render Home Assistant dashboards (or any URL) with pyppeteer and send screenshots directly to Samsung Frame TV via WebSocket API.
 
 ## Features
 
-- **Playwright Rendering**: Headless Chromium captures any URL as PNG with configurable resolution and zoom
+- **pyppeteer Rendering**: Headless Chromium captures any URL as PNG with configurable resolution and zoom
 - **Direct TV Upload**: Async WebSocket connection to Samsung Frame TV for instant art mode updates
 - **Flexible Authentication**: Support for bearer tokens, basic auth, or custom headers for image providers
-- **Screensaver Mode**: Cycle through local images at configurable intervals
 - **Replace Last**: Optionally replace the previous uploaded image instead of creating new art entries
-- **HTTP API**: Control screensaver and access rendered images via HTTP endpoints
+- **HTTP API**: Access rendered images via HTTP endpoints
 
 ## Configuration
 
@@ -47,14 +46,6 @@ Render Home Assistant dashboards (or any URL) with Playwright and send screensho
 | `tv_show_after_upload` | Show image immediately after upload | `true` |
 | `tv_replace_last` | Replace previous image instead of creating new entry | `false` |
 
-### Screensaver
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `screensaver_enabled` | Enable screensaver cycling | `false` |
-| `screensaver_dir` | Directory containing screensaver images | `./screensaver` |
-| `screensaver_interval` | Seconds between screensaver images | `60` |
-
 ## Usage
 
 1. Add this repository to Home Assistant:
@@ -69,10 +60,7 @@ Render Home Assistant dashboards (or any URL) with Playwright and send screensho
 4. Start the add-on
 
 5. (Optional) Access the HTTP API:
-   - `http://[host]:8200/art.jpg` - View current screenshot
-   - `http://[host]:8200/screensaver/start` - Start screensaver
-   - `http://[host]:8200/screensaver/stop` - Stop screensaver
-   - `http://[host]:8200/screensaver/status` - Check screensaver status
+  - `http://[host]:8200/art.jpg` - View current screenshot
 
 ## Authentication Examples
 
@@ -110,7 +98,7 @@ Render Home Assistant dashboards (or any URL) with Playwright and send screensho
 ## How It Works
 
 1. Addon periodically fetches from `image_provider_url`
-2. If HTML is detected, Playwright renders it with Chromium at the configured resolution and zoom
+2. If HTML is detected, pyppeteer renders it with Chromium at the configured resolution and zoom
 3. Resulting image is uploaded to Samsung Frame TV via async WebSocket connection
 4. TV displays the image in art mode (if `tv_show_after_upload` is true)
 5. Optional: Replace the previous image to avoid filling up TV storage
@@ -129,7 +117,7 @@ Render Home Assistant dashboards (or any URL) with Playwright and send screensho
 - Ensure TV is powered on and connected to network
 - Check Home Assistant logs for connection errors
 
-### Playwright Rendering Issues
+### pyppeteer Rendering Issues
 
 - Increase `screenshot_zoom` if content appears too small
 - Adjust `screenshot_width` and `screenshot_height` for your TV's native resolution

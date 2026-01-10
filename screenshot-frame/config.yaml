@@ -42,9 +42,6 @@ options:
   tv_show_after_upload: true
   tv_replace_last: false
   tv_last_art_file: /data/last-art-id.txt
-  screensaver_enabled: false
-  screensaver_dir: ./screensaver
-  screensaver_interval: 60
 schema:
   image_provider_url: str                           # URL to fetch an image or HTML from
   image_provider_auth_type: list(none|bearer|basic|headers)
@@ -66,6 +63,3 @@ schema:
   tv_show_after_upload: bool                        # Select the uploaded art immediately
   tv_replace_last: bool                             # Replace last uploaded art instead of adding new
   tv_last_art_file: str?                            # Path to cache last art ID (only if replace_last)
-  screensaver_enabled: bool                         # Cycle local images as screensaver
-  screensaver_dir: str?                             # Directory of local images (used if screensaver_enabled)
-  screensaver_interval: int                         # Seconds between screensaver image changes

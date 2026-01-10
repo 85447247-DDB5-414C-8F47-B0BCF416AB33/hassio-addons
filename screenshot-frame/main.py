@@ -46,7 +46,7 @@ IMAGE_PROVIDER_HEADERS = os.environ.get('IMAGE_PROVIDER_HEADERS')  # optional JS
 # Replace-last behavior: attempt to overwrite previous art id instead of
 # creating a new stored item. When enabled the add-on will persist the
 # last art id to `TV_LAST_ART_FILE` and try common replace/update APIs.
-TV_REPLACE_LAST = os.environ.get('TV_REPLACE_LAST', 'false').lower() in ('1', 'true', 'yes')
+TV_REPLACE_LAST = os.environ.get('TV_REPLACE_LAST', 'true').lower() in ('1', 'true', 'yes')
 TV_LAST_ART_FILE = os.environ.get('TV_LAST_ART_FILE', '/data/last-art-id.txt')
 
 
@@ -56,16 +56,6 @@ TV_LAST_ART_FILE = os.environ.get('TV_LAST_ART_FILE', '/data/last-art-id.txt')
 # at a reachable URL (for example the lovelace renderer at port 5000).
 
 
-# Screensaver configuration
-SCREENSAVER_ENABLED = os.environ.get('SCREENSAVER_ENABLED', 'false').lower() in ('1','true','yes')
-SCREENSAVER_DIR = Path(os.environ.get('SCREENSAVER_DIR') or './screensaver')
-SCREENSAVER_INTERVAL = int(os.environ.get('SCREENSAVER_INTERVAL', '60'))
-
-# Ensure screensaver directory exists
-try:
-    SCREENSAVER_DIR.mkdir(parents=True, exist_ok=True)
-except Exception:
-    pass
 
 async def upload_image_to_tv_async(host: str, port: int, image_path: str, matte: str = None, show: bool = True):
     try:
@@ -94,112 +84,32 @@ async def upload_image_to_tv_async(host: str, port: int, image_path: str, matte:
         print(f'Uploading image to TV {host}:{port} (type={file_type})')
         content_id = None
 
-        # If configured, try to replace the previously-uploaded art id in-place
-        # so we don't create a new stored item. This is best-effort and will
-        # attempt several common API signatures exposed by different
-        # samsungtvws versions. If none succeed we fall back to uploading.
-        if TV_REPLACE_LAST:
+        # Deterministic replace path: if we have a last id, attempt replace; otherwise seed with a new upload
+        last_id = None
+        if TV_REPLACE_LAST and os.path.exists(TV_LAST_ART_FILE):
             try:
-                if os.path.exists(TV_LAST_ART_FILE):
-                    with open(TV_LAST_ART_FILE, 'r') as lf:
-                        last_id = lf.read().strip()
-                else:
-                    last_id = None
+                with open(TV_LAST_ART_FILE, 'r') as lf:
+                    last_id = lf.read().strip() or None
             except Exception:
                 last_id = None
 
-            if last_id:
-                print('TV_REPLACE_LAST enabled; attempting in-place replace of', last_id)
-                # Try calling upload with various id kwarg names
-                id_kw_names = ('content_id', 'art_id', 'image_id', 'id', 'existing_id')
-                for kw in id_kw_names:
-                    if content_id:
-                        break
-                    try:
-                        kwargs = {kw: last_id, 'file_type': file_type}
-                        if matte:
-                            kwargs['matte'] = matte
-                        content_id = await tv.upload(data, **kwargs)
-                        if content_id:
-                            print(f'Replaced art using upload(..., {kw}=...)')
-                            break
-                    except TypeError:
-                        # signature mismatch — try next
-                        content_id = None
-                    except Exception as e:
-                        print('Replace attempt via upload with', kw, 'failed:', e)
-
-                # Try common method names like replace/update on the tv object
-                if not content_id:
-                    method_names = ('replace', 'update', 'replace_image', 'update_image', 'update_art')
-                    for name in method_names:
-                        if content_id:
-                            break
-                        method = getattr(tv, name, None)
-                        if method and callable(method):
-                            try:
-                                # try (id, data, file_type)
-                                res = await method(last_id, data, file_type=file_type)
-                                if res:
-                                    content_id = last_id
-                                    print(f'Replaced art using tv.{name}(id, data, ...)')
-                                    break
-                            except TypeError:
-                                try:
-                                    # try (data, file_type, id=...)
-                                    res = await method(data, file_type=file_type, id=last_id)
-                                    if res:
-                                        content_id = last_id
-                                        print(f'Replaced art using tv.{name}(data, file_type, id=...)')
-                                        break
-                                except Exception:
-                                    pass
-                            except Exception as e:
-                                print('Replace attempt via', name, 'failed:', e)
-
-                # Try art() namespace if present (sync-style API may be proxied)
-                if not content_id and hasattr(tv, 'art'):
-                    try:
-                        art_ns = tv.art()
-                        for name in ('replace', 'update', 'upload'):
-                            if content_id:
-                                break
-                            method = getattr(art_ns, name, None)
-                            if method and callable(method):
-                                try:
-                                    # many art_ns methods are sync; attempt async if coroutine
-                                    res = method(data, file_type=file_type, id=last_id) if name == 'upload' else method(last_id, data)
-                                    # if res is awaitable, await it
-                                    if asyncio.iscoroutine(res):
-                                        res = await res
-                                    if res:
-                                        content_id = last_id if name != 'upload' else res
-                                        print(f'Replaced art using art().{name}()')
-                                        break
-                                except TypeError:
-                                    try:
-                                        # try alternative signatures
-                                        res = method(last_id, data, file_type)
-                                        if asyncio.iscoroutine(res):
-                                            res = await res
-                                        if res:
-                                            content_id = last_id
-                                            print(f'Replaced art using art().{name}() alt')
-                                            break
-                                    except Exception:
-                                        pass
-                                except Exception as e:
-                                    print('art().'+name+' failed:', e)
-                    except Exception:
-                        pass
-
-                if content_id:
-                    print('In-place replace succeeded; using id', content_id)
-
-        # If replace didn't run or didn't succeed, upload as normal
-        if not content_id:
+        if TV_REPLACE_LAST and last_id:
+            print('TV_REPLACE_LAST enabled; replacing art id', last_id)
             try:
-                # Prefer the matte-aware signature, but fall back if not available.
+                kwargs = {'content_id': last_id, 'file_type': file_type}
+                if matte:
+                    kwargs['matte'] = matte
+                content_id = await tv.upload(data, **kwargs)
+                if not content_id:
+                    raise RuntimeError('Replace returned no content id')
+                print('In-place replace succeeded; using id', content_id)
+            except Exception as e:
+                print('In-place replace failed; not falling back to new upload:', e)
+                await tv.close()
+                return None
+        else:
+            # Seed initial art id or when replace is disabled
+            try:
                 content_id = await tv.upload(data, file_type=file_type, matte=matte) if matte else await tv.upload(data, file_type=file_type)
             except TypeError:
                 content_id = await tv.upload(data, file_type=file_type)
@@ -324,7 +234,7 @@ async def screenshot_loop(app):
                                         # Fallback: save the raw response (likely HTML) for debugging
                                         with open(str(ART_PATH), 'wb') as f:
                                             f.write(content)
-                                        print('Playwright not available or failed; saved raw provider response to', ART_PATH)
+                                        print('pyppeteer not available or failed; saved raw provider response to', ART_PATH)
                                 else:
                                     with open(str(ART_PATH), 'wb') as f:
                                         f.write(content)
@@ -349,101 +259,6 @@ async def screenshot_loop(app):
         await asyncio.sleep(INTERVAL)
 
 
-async def get_screensaver_images():
-    images = []
-    try:
-        for p in SCREENSAVER_DIR.iterdir():
-            if p.is_file() and p.suffix.lower() in ('.jpg', '.jpeg', '.png'):
-                images.append(str(p))
-    except Exception:
-        pass
-    images.sort()
-    return images
-
-
-async def screensaver_loop(app):
-    images = await get_screensaver_images()
-    if not images:
-        print('Screensaver enabled but no images in', SCREENSAVER_DIR)
-    idx = 0
-    print('Screensaver loop started; cycling images every', SCREENSAVER_INTERVAL, 's')
-    try:
-        while True:
-            images = await get_screensaver_images()
-            if not images:
-                await asyncio.sleep(SCREENSAVER_INTERVAL)
-                continue
-
-            img = images[idx % len(images)]
-            try:
-                print('Screensaver uploading', img)
-                content_id = await upload_image_to_tv_async(TV_IP, TV_PORT, img, TV_MATTE, True)
-                if not content_id:
-                    print('Async screensaver upload returned no id for', img)
-            except Exception as e:
-                print('Screensaver upload error:', e)
-
-            idx += 1
-            await asyncio.sleep(SCREENSAVER_INTERVAL)
-    except asyncio.CancelledError:
-        print('Screensaver loop cancelled')
-    except Exception as e:
-        print('Screensaver loop error:', e)
-
-
-async def handle_screensaver_start(request):
-    app = request.app
-    if app.get('screensaver_task'):
-        return web.json_response({'status': 'already_running'})
-    if not TV_IP:
-        return web.json_response({'status': 'tv_not_configured'}, status=400)
-    task = asyncio.create_task(screensaver_loop(app))
-    app['screensaver_task'] = task
-    return web.json_response({'status': 'started'})
-
-
-async def handle_screensaver_stop(request):
-    app = request.app
-    task = app.get('screensaver_task')
-    if not task:
-        return web.json_response({'status': 'not_running'})
-    task.cancel()
-    try:
-        await task
-    except Exception:
-        pass
-    app['screensaver_task'] = None
-    return web.json_response({'status': 'stopped'})
-
-
-async def handle_screensaver_status(request):
-    app = request.app
-    running = bool(app.get('screensaver_task'))
-    images = await get_screensaver_images()
-    return web.json_response({'running': running, 'image_count': len(images)})
-
-
-async def handle_screensaver_upload(request):
-    reader = await request.multipart()
-    saved = []
-    # accept multiple files
-    while True:
-        part = await reader.next()
-        if part is None:
-            break
-        if part.filename:
-            filename = os.path.basename(part.filename)
-            dest = SCREENSAVER_DIR / filename
-            with open(dest, 'wb') as f:
-                while True:
-                    chunk = await part.read_chunk()
-                    if not chunk:
-                        break
-                    f.write(chunk)
-            saved.append(str(dest))
-    return web.json_response({'saved': saved})
-
-
 async def handle_art(request):
     if not ART_PATH.exists():
         raise web.HTTPNotFound()
@@ -453,31 +268,33 @@ async def handle_art(request):
 async def init_app():
     app = web.Application()
     app.router.add_get('/art.jpg', handle_art)
-    # screensaver control endpoints
-    app.router.add_post('/screensaver/start', handle_screensaver_start)
-    app.router.add_post('/screensaver/stop', handle_screensaver_stop)
-    app.router.add_get('/screensaver/status', handle_screensaver_status)
-    app.router.add_post('/screensaver/upload', handle_screensaver_upload)
-    app['screensaver_task'] = None
     return app
 
 
-def main():
-    loop = asyncio.get_event_loop()
-    app = loop.run_until_complete(init_app())
+async def async_main():
+    app = await init_app()
     runner = web.AppRunner(app)
-    loop.run_until_complete(runner.setup())
+    await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', HTTP_PORT)
-    loop.run_until_complete(site.start())
+    await site.start()
     print(f'HTTP server running on 0.0.0.0:{HTTP_PORT} serving /art.jpg')
-    # start screenshot loop
-    loop.create_task(screenshot_loop(app))
-    # start screensaver loop if enabled
-    if SCREENSAVER_ENABLED and TV_IP:
-        app_task = loop.create_task(screensaver_loop(app))
-        app['screensaver_task'] = app_task
+
+    loop = asyncio.get_running_loop()
+    screenshot_task = loop.create_task(screenshot_loop(app))
     try:
-        loop.run_forever()
+        await asyncio.Event().wait()  # run indefinitely until cancelled/interrupt
+    finally:
+        screenshot_task.cancel()
+        try:
+            await screenshot_task
+        except asyncio.CancelledError:
+            pass
+        await runner.cleanup()
+
+
+def main():
+    try:
+        asyncio.run(async_main())
     except KeyboardInterrupt:
         pass
 
