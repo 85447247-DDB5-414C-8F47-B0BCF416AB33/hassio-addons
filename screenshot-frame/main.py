@@ -40,6 +40,7 @@ INTERVAL = int(os.environ.get('INTERVAL_SECONDS', os.environ.get('INTERVAL', 300
 SCREENSHOT_WIDTH = int(os.environ.get('SCREENSHOT_WIDTH', '1920'))
 SCREENSHOT_HEIGHT = int(os.environ.get('SCREENSHOT_HEIGHT', '1080'))
 SCREENSHOT_ZOOM = int(os.environ.get('SCREENSHOT_ZOOM', '100'))  # percentage: 100 = 100%, 150 = 150%, etc.
+SCREENSHOT_WAIT = float(os.environ.get('SCREENSHOT_WAIT', '2.0'))  # seconds to wait after DOM load for dynamic content
 
 # Local TV options (from add-on options.json exported by run.sh)
 TV_IP = os.environ.get('TV_IP') or ''
@@ -68,6 +69,7 @@ logger.info(f'  Target URL: {TARGET_URL if TARGET_URL else "NOT SET"}')
 logger.info(f'  Auth Type: {TARGET_AUTH_TYPE}')
 logger.info(f'  Interval: {INTERVAL}s')
 logger.info(f'  Screenshot: {SCREENSHOT_WIDTH}x{SCREENSHOT_HEIGHT} @ {SCREENSHOT_ZOOM}% zoom')
+logger.info(f'  Screenshot Wait: {SCREENSHOT_WAIT}s (after DOM load)')
 logger.info(f'  Art Path: {ART_PATH}')
 logger.info(f'  TV Upload: {"ENABLED" if TV_IP else "DISABLED"}')
 if TV_IP:
@@ -189,55 +191,92 @@ async def upload_image_to_tv_async(host: str, port: int, image_path: str, matte:
     return await loop.run_in_executor(None, _sync_upload)
 
 
+# Global browser and page instances for persistent rendering
+_browser = None
+_page = None
+_page_lock = asyncio.Lock()
+
+async def _ensure_browser(width: int, height: int):
+    """Ensure browser instance is running. Returns (browser, page)."""
+    global _browser, _page
+    
+    # Check if browser is still connected
+    if _browser is not None:
+        try:
+            # Test if browser is still alive
+            await _browser.version()
+        except Exception:
+            logger.info('[BROWSER] Browser connection lost, relaunching...')
+            _browser = None
+            _page = None
+    
+    if _browser is None:
+        logger.info('[BROWSER] Launching persistent browser instance...')
+        executable_candidates = ['/usr/bin/chromium-browser', '/usr/bin/chromium']
+        executable_path = None
+        for cand in executable_candidates:
+            if os.path.exists(cand):
+                executable_path = cand
+                break
+        
+        try:
+            if executable_path:
+                _browser = await pyppeteer.launch(headless=True, executablePath=executable_path)
+            else:
+                _browser = await pyppeteer.launch(headless=True)
+        except Exception:
+            args = ['--no-sandbox']
+            if executable_path:
+                _browser = await pyppeteer.launch(headless=True, executablePath=executable_path, args=args)
+            else:
+                _browser = await pyppeteer.launch(headless=True, args=args)
+        
+        logger.info('[BROWSER] ✓ Browser launched successfully')
+        _page = None  # Force new page creation
+    
+    if _page is None:
+        logger.info('[BROWSER] Creating new page...')
+        _page = await _browser.newPage()
+        await _page.setViewport({'width': width, 'height': height})
+        logger.info('[BROWSER] ✓ Page created')
+    
+    return _browser, _page
+
+
 async def render_url_with_pyppeteer(url: str, headers: dict | None = None, timeout: int = 30000, width: int = 1920, height: int = 1080, zoom: int = 100):
     """Render the given URL to a PNG using pyppeteer and return bytes.
 
     Args:
         zoom: Zoom percentage (100 = 100%, 150 = 150%, 50 = 50%)
 
-    Raises an exception on failure so the add-on fails fast if pyppeteer
-    cannot render. pyppeteer is required for this add-on's primary purpose.
+    Uses persistent browser instance for faster subsequent renders.
     """
-    # Try launching with default args first; fall back to no-sandbox
-    # Prefer system Chromium if available to avoid downloads
-    executable_candidates = ['/usr/bin/chromium-browser', '/usr/bin/chromium']
-    executable_path = None
-    for cand in executable_candidates:
-        if os.path.exists(cand):
-            executable_path = cand
-            break
-    try:
-        if executable_path:
-            browser = await pyppeteer.launch(headless=True, executablePath=executable_path)
-        else:
-            browser = await pyppeteer.launch(headless=True)
-    except Exception:
-        args = ['--no-sandbox']
-        if executable_path:
-            browser = await pyppeteer.launch(headless=True, executablePath=executable_path, args=args)
-        else:
-            browser = await pyppeteer.launch(headless=True, args=args)
-    
-    page = await browser.newPage()
-    # Set viewport for the desired width/height
-    await page.setViewport({'width': width, 'height': height})
-    
-    # Set user agent and extra headers if provided
-    if headers:
-        await page.setExtraHTTPHeaders(headers)
-    
-    # Navigate to URL with timeout
-    await page.goto(url, {'waitUntil': 'networkidle2', 'timeout': timeout})
-    
-    # Apply zoom by scaling the page
-    if zoom != 100:
-        await page.evaluate(f'() => {{ document.body.style.zoom = "{zoom}%" }}')
-    
-    # Take screenshot
-    screenshot = await page.screenshot({'fullPage': False})
-    await page.close()
-    await browser.close()
-    return screenshot
+    async with _page_lock:
+        browser, page = await _ensure_browser(width, height)
+        
+        # Set extra headers if provided
+        if headers:
+            await page.setExtraHTTPHeaders(headers)
+        
+        # Navigate to URL - use 'domcontentloaded' instead of 'networkidle2' for faster rendering
+        # This waits for DOM to be ready but doesn't wait for all network activity to stop
+        logger.info('[BROWSER] Navigating to URL...')
+        await page.goto(url, {'waitUntil': 'domcontentloaded', 'timeout': timeout})
+        
+        # Wait for dynamic content to load (configurable via SCREENSHOT_WAIT)
+        if SCREENSHOT_WAIT > 0:
+            await asyncio.sleep(SCREENSHOT_WAIT)
+        
+        # Apply zoom by scaling the page
+        if zoom != 100:
+            await page.evaluate(f'() => {{ document.body.style.zoom = "{zoom}%" }}')
+        
+        # Take screenshot
+        logger.info('[BROWSER] Taking screenshot...')
+        screenshot = await page.screenshot({'fullPage': False})
+        logger.info('[BROWSER] ✓ Screenshot captured')
+        
+        return screenshot
 
 
 async def screenshot_loop():
@@ -336,6 +375,22 @@ async def async_main():
             await screenshot_task
         except asyncio.CancelledError:
             pass
+        
+        # Clean up persistent browser
+        global _browser, _page
+        if _page:
+            try:
+                await _page.close()
+                logger.info('[SHUTDOWN] Closed browser page')
+            except Exception:
+                pass
+        if _browser:
+            try:
+                await _browser.close()
+                logger.info('[SHUTDOWN] Closed browser instance')
+            except Exception:
+                pass
+        
         await runner.cleanup()
         logger.info('[SHUTDOWN] Cleanup complete')
 

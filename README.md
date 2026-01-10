@@ -30,6 +30,7 @@ Render Home Assistant dashboards (or any URL) with pyppeteer and send screenshot
 | `screenshot_width` | Screenshot width in pixels | `1920` |
 | `screenshot_height` | Screenshot height in pixels | `1080` |
 | `screenshot_zoom` | Zoom percentage (10-500%) | `100` |
+| `screenshot_wait` | Seconds to wait after DOM load for dynamic content (0 = no wait) | `2.0` |
 | `interval_seconds` | Seconds between screenshot updates | `300` |
 | `http_port` | HTTP server port | `8200` |
 
@@ -96,8 +97,17 @@ Render Home Assistant dashboards (or any URL) with pyppeteer and send screenshot
 ## How It Works
 
 1. Addon periodically fetches from `target_url`
-2. If HTML is detected, pyppeteer renders it with Chromium at the configured resolution and zoom
+2. If HTML is detected, pyppeteer renders it with a **persistent Chromium browser** at the configured resolution and zoom
 3. Resulting image is uploaded to Samsung Frame TV via async WebSocket connection
+4. Browser instance stays running between screenshots for faster subsequent renders (~5-10s vs ~90s)
+
+## Performance Tips
+
+For fast refresh rates (60 seconds or less):
+
+- **`screenshot_wait`**: Lower values (0.5-1.5s) render faster but may miss slow-loading content. Higher values (2-5s) ensure content loads but take longer.
+- **`interval_seconds`**: With persistent browser, 60-second intervals are achievable. First screenshot takes ~60s to launch browser, subsequent ones take ~5-10s.
+- **DakBoard**: Simple screens render faster than complex ones with many widgets/images.
 4. TV displays the image in art mode (if `tv_show_after_upload` is true)
 5. Optional: Replace the previous image to avoid filling up TV storage
 
