@@ -1,5 +1,5 @@
 name: Screenshot to Samsung Frame
-version: "0.1.1"
+version: "0.1.2"
 slug: screenshot-frame
 description: Periodically screenshots a Home Assistant dashboard and serves it for a Samsung Frame TV.
 startup: application
@@ -46,26 +46,26 @@ options:
   screensaver_dir: ./screensaver
   screensaver_interval: 60
 schema:
-  image_provider_url: str
+  image_provider_url: str                           # URL to fetch an image or HTML from
   image_provider_auth_type: list(none|bearer|basic|headers)
-  image_provider_token: str
-  image_provider_token_header: str
-  image_provider_token_prefix: str
-  image_provider_username: str
-  image_provider_password: str
-  image_provider_headers: str
-  interval_seconds: int
-  http_port: int
-  screenshot_width: int
-  screenshot_height: int
-  screenshot_zoom: int
-  use_local_tv: bool
-  tv_ip: str
-  tv_port: int
-  tv_matte: str
-  tv_show_after_upload: bool
-  tv_replace_last: bool
-  tv_last_art_file: str
-  screensaver_enabled: bool
-  screensaver_dir: str
-  screensaver_interval: int
+  image_provider_token: str?                        # Token only when auth_type is bearer
+  image_provider_token_header: str?                 # Header name for bearer token
+  image_provider_token_prefix: str?                 # Prefix for bearer token (e.g., Bearer)
+  image_provider_username: str?                     # Basic auth username
+  image_provider_password: str?                     # Basic auth password
+  image_provider_headers: str?                      # JSON string of custom headers when auth_type=headers
+  interval_seconds: int                             # How often to refresh the image
+  http_port: int                                    # Local HTTP port to serve the latest image
+  screenshot_width: int                             # Rendered browser width in pixels
+  screenshot_height: int                            # Rendered browser height in pixels
+  screenshot_zoom: int                              # Zoom percentage (100 = 100%)
+  use_local_tv: bool                                # Enable direct upload to Samsung Frame
+  tv_ip: str?                                       # TV IP address (required if use_local_tv is true)
+  tv_port: int                                      # TV API port (default 8002)
+  tv_matte: str?                                    # Matte style name (optional)
+  tv_show_after_upload: bool                        # Select the uploaded art immediately
+  tv_replace_last: bool                             # Replace last uploaded art instead of adding new
+  tv_last_art_file: str?                            # Path to cache last art ID (only if replace_last)
+  screensaver_enabled: bool                         # Cycle local images as screensaver
+  screensaver_dir: str?                             # Directory of local images (used if screensaver_enabled)
+  screensaver_interval: int                         # Seconds between screensaver image changes
