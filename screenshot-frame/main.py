@@ -75,108 +75,116 @@ if TV_IP:
 logger.info('='*60)
 
 async def upload_image_to_tv_async(host: str, port: int, image_path: str, matte: str = None, show: bool = True):
+    """Upload image to Samsung TV using sync library in executor."""
     logger.info(f'[TV UPLOAD] Starting upload to {host}:{port}')
+    
     try:
-        from samsungtvws.async_art import SamsungTVAsyncArt
+        from samsungtvws import SamsungTVArt
     except Exception as e:
-        logger.info(f'[TV UPLOAD] ERROR: samsungtvws.async_art library not available: {e}')
+        logger.info(f'[TV UPLOAD] ERROR: samsungtvws library not available: {e}')
         return None
 
-    token_file = '/data/tv-token.txt'
-    tv = None
-    try:
-        logger.info(f'[TV UPLOAD] Connecting to TV (token file: {token_file})')
-        tv = SamsungTVAsyncArt(host=host, port=port, token_file=token_file)
-        await tv.start_listening()
+    def _sync_upload():
+        """Synchronous upload function to run in executor."""
+        token_file = '/data/tv-token.txt'
+        tv = None
+        try:
+            logger.info(f'[TV UPLOAD] Connecting to TV (token file: {token_file})')
+            tv = SamsungTVArt(host=host, port=port, token_file=token_file)
+            tv.open()
 
-        supported = await tv.supported()
-        if not supported:
-            logger.info('[TV UPLOAD] ERROR: TV does not support art mode via this API')
-            await tv.close()
-            return None
-
-        # read image bytes
-        logger.info(f'[TV UPLOAD] Reading image from {image_path}')
-        with open(image_path, 'rb') as f:
-            data = f.read()
-        logger.info(f'[TV UPLOAD] Image size: {len(data)} bytes')
-
-        file_type = os.path.splitext(image_path)[1][1:].upper() or 'JPEG'
-        logger.info(f'[TV UPLOAD] Uploading image (type={file_type}, matte={matte}, show={show})')
-        content_id = None
-
-        # Always attempt to replace last art if we have a cached ID
-        last_id = None
-        if os.path.exists(TV_LAST_ART_FILE):
-            try:
-                with open(TV_LAST_ART_FILE, 'r') as lf:
-                    last_id = lf.read().strip() or None
-                logger.info(f'[TV UPLOAD] Found cached art ID: {last_id}')
-            except Exception:
-                last_id = None
-
-        if last_id:
-            logger.info(f'[TV UPLOAD] Attempting to replace existing art ID: {last_id}')
-            try:
-                kwargs = {'content_id': last_id, 'file_type': file_type}
-                if matte:
-                    kwargs['matte'] = matte
-                content_id = await tv.upload(data, **kwargs)
-                if not content_id:
-                    raise RuntimeError('Replace returned no content id')
-                logger.info(f'[TV UPLOAD] ✓ In-place replace succeeded; using id: {content_id}')
-            except Exception as e:
-                logger.info(f'[TV UPLOAD] ERROR: In-place replace failed: {e}')
-                logger.info('[TV UPLOAD] Not falling back to new upload')
-                await tv.close()
+            supported = tv.supported()
+            if not supported:
+                logger.info('[TV UPLOAD] ERROR: TV does not support art mode via this API')
+                tv.close()
                 return None
-        else:
-            # Seed initial art id on first upload
-            logger.info('[TV UPLOAD] No cached ID found, creating new art entry')
-            try:
-                content_id = await tv.upload(data, file_type=file_type, matte=matte) if matte else await tv.upload(data, file_type=file_type)
-            except TypeError:
-                content_id = await tv.upload(data, file_type=file_type)
 
-        logger.info(f'[TV UPLOAD] Upload returned id: {content_id}')
-        if content_id is not None:
-            logger.info(f'[TV UPLOAD] Attempting to select image on TV (show={show})')
-            try:
-                # Try to select with show parameter (controls whether image is displayed)
-                await tv.select_image(content_id, show=show)
-                logger.info(f'[TV UPLOAD] ✓ Selected uploaded image on TV (show={show})')
-            except TypeError:
-                # If show parameter not supported, try without it
+            # read image bytes
+            logger.info(f'[TV UPLOAD] Reading image from {image_path}')
+            with open(image_path, 'rb') as f:
+                data = f.read()
+            logger.info(f'[TV UPLOAD] Image size: {len(data)} bytes')
+
+            file_type = os.path.splitext(image_path)[1][1:].upper() or 'JPEG'
+            logger.info(f'[TV UPLOAD] Uploading image (type={file_type}, matte={matte}, show={show})')
+            content_id = None
+
+            # Always attempt to replace last art if we have a cached ID
+            last_id = None
+            if os.path.exists(TV_LAST_ART_FILE):
                 try:
-                    await tv.select_image(content_id)
-                    logger.info('[TV UPLOAD] ✓ Selected uploaded image on TV (without show parameter)')
+                    with open(TV_LAST_ART_FILE, 'r') as lf:
+                        last_id = lf.read().strip() or None
+                    logger.info(f'[TV UPLOAD] Found cached art ID: {last_id}')
+                except Exception:
+                    last_id = None
+
+            if last_id:
+                logger.info(f'[TV UPLOAD] Attempting to replace existing art ID: {last_id}')
+                try:
+                    kwargs = {'content_id': last_id, 'file_type': file_type}
+                    if matte:
+                        kwargs['matte'] = matte
+                    content_id = tv.upload(data, **kwargs)
+                    if not content_id:
+                        raise RuntimeError('Replace returned no content id')
+                    logger.info(f'[TV UPLOAD] ✓ In-place replace succeeded; using id: {content_id}')
+                except Exception as e:
+                    logger.info(f'[TV UPLOAD] ERROR: In-place replace failed: {e}')
+                    logger.info('[TV UPLOAD] Not falling back to new upload')
+                    tv.close()
+                    return None
+            else:
+                # Seed initial art id on first upload
+                logger.info('[TV UPLOAD] No cached ID found, creating new art entry')
+                try:
+                    content_id = tv.upload(data, file_type=file_type, matte=matte) if matte else tv.upload(data, file_type=file_type)
+                except TypeError:
+                    content_id = tv.upload(data, file_type=file_type)
+
+            logger.info(f'[TV UPLOAD] Upload returned id: {content_id}')
+            if content_id is not None:
+                logger.info(f'[TV UPLOAD] Attempting to select image on TV (show={show})')
+                try:
+                    # Try to select with show parameter (controls whether image is displayed)
+                    tv.select_image(content_id, show=show)
+                    logger.info(f'[TV UPLOAD] ✓ Selected uploaded image on TV (show={show})')
+                except TypeError:
+                    # If show parameter not supported, try without it
+                    try:
+                        tv.select_image(content_id)
+                        logger.info('[TV UPLOAD] ✓ Selected uploaded image on TV (without show parameter)')
+                    except Exception as e:
+                        logger.info(f'[TV UPLOAD] ERROR: Failed to select uploaded image: {e}')
                 except Exception as e:
                     logger.info(f'[TV UPLOAD] ERROR: Failed to select uploaded image: {e}')
+
+            tv.close()
+            logger.info('[TV UPLOAD] TV connection closed')
+
+            # Persist last art id for future replace attempts
+            try:
+                if content_id:
+                    with open(TV_LAST_ART_FILE, 'w') as lf:
+                        lf.write(str(content_id))
+                    logger.info(f'[TV UPLOAD] ✓ Cached art ID {content_id} to {TV_LAST_ART_FILE}')
             except Exception as e:
-                logger.info(f'[TV UPLOAD] ERROR: Failed to select uploaded image: {e}')
+                logger.info(f'[TV UPLOAD] Warning: Failed to cache art ID: {e}')
 
-        await tv.close()
-        logger.info('[TV UPLOAD] TV connection closed')
-
-        # Persist last art id for future replace attempts
-        try:
-            if content_id:
-                with open(TV_LAST_ART_FILE, 'w') as lf:
-                    lf.write(str(content_id))
-                logger.info(f'[TV UPLOAD] ✓ Cached art ID {content_id} to {TV_LAST_ART_FILE}')
+            return content_id
+            
         except Exception as e:
-            logger.info(f'[TV UPLOAD] Warning: Failed to cache art ID: {e}')
-            pass
+            logger.info(f'[TV UPLOAD] ERROR: Exception during TV interaction: {e}')
+            try:
+                if tv:
+                    tv.close()
+            except Exception:
+                pass
+            return None
 
-        return content_id
-    except Exception as e:
-        logger.info(f'[TV UPLOAD] ERROR: Exception during TV interaction: {e}')
-        try:
-            if tv:
-                await tv.close()
-        except Exception:
-            pass
-        return None
+    # Run sync function in thread executor
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _sync_upload)
 
 
 async def render_url_with_pyppeteer(url: str, headers: dict | None = None, timeout: int = 30000, width: int = 1920, height: int = 1080, zoom: int = 100):
@@ -275,22 +283,22 @@ async def screenshot_loop(app):
                                     if rendered:
                                         with open(str(ART_PATH), 'wb') as f:
                                             f.write(rendered)
-                                        logger.info('Saved pyppeteer-rendered image to', ART_PATH)
+                                        logger.info(f'Saved pyppeteer-rendered image to {ART_PATH}')
                                     else:
                                         # Fallback: save the raw response (likely HTML) for debugging
                                         with open(str(ART_PATH), 'wb') as f:
                                             f.write(content)
-                                        logger.info('pyppeteer not available or failed; saved raw target response to', ART_PATH)
+                                        logger.info(f'pyppeteer not available or failed; saved raw target response to {ART_PATH}')
                                 else:
                                     with open(str(ART_PATH), 'wb') as f:
                                         f.write(content)
-                                    logger.info('Saved image from target to', ART_PATH)
+                                    logger.info(f'Saved image from target to {ART_PATH}')
                             else:
-                                logger.info('Target URL returned status', resp.status)
+                                logger.info(f'Target URL returned status {resp.status}')
                 except Exception as e:
-                    logger.info('Error fetching from target URL:', e)
+                    logger.info(f'Error fetching from target URL: {e}')
         except Exception as e:
-            logger.info('Fetch loop error:', e)
+            logger.info(f'Fetch loop error: {e}')
 
         if TV_IP:
             logger.info(f'[LOOP] TV upload enabled, uploading to {TV_IP}:{TV_PORT}')
