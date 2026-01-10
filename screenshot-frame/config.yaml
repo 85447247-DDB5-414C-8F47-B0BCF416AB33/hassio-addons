@@ -1,5 +1,5 @@
 name: Screenshot to Samsung Frame
-version: "0.1.5"
+version: "0.1.6"
 slug: screenshot-frame
 description: Periodically screenshots a Home Assistant dashboard and serves it for a Samsung Frame TV.
 startup: application
@@ -22,14 +22,14 @@ ports:
 webui: "http://[HOST]:[PORT:8200]"
 host_network: true
 options:
-  image_provider_url: http://homeassistant.local:5000/
-  image_provider_auth_type: none
-  image_provider_token: ""
-  image_provider_token_header: Authorization
-  image_provider_token_prefix: Bearer
-  image_provider_username: ""
-  image_provider_password: ""
-  image_provider_headers: ""
+  target_url: http://homeassistant.local:5000/
+  target_auth_type: none
+  target_token: ""
+  target_token_header: Authorization
+  target_token_prefix: Bearer
+  target_username: ""
+  target_password: ""
+  target_headers: ""
   interval_seconds: 300
   http_port: 8200
   screenshot_width: 1920
@@ -39,18 +39,16 @@ options:
   tv_ip: ""
   tv_port: 8002
   tv_matte: ""
-  tv_show_after_upload: true
-  tv_replace_last: false
-  tv_last_art_file: /data/last-art-id.txt
+  tv_show_after_upload: false
 schema:
-  image_provider_url: str                           # URL to fetch an image or HTML from
-  image_provider_auth_type: list(none|bearer|basic|headers)
-  image_provider_token: str?                        # Token only when auth_type is bearer
-  image_provider_token_header: str?                 # Header name for bearer token
-  image_provider_token_prefix: str?                 # Prefix for bearer token (e.g., Bearer)
-  image_provider_username: str?                     # Basic auth username
-  image_provider_password: str?                     # Basic auth password
-  image_provider_headers: str?                      # JSON string of custom headers when auth_type=headers
+  target_url: str                                   # URL to screenshot (HTML page or image)
+  target_auth_type: list(none|bearer|basic|headers)
+  target_token: str?                                # Token only when auth_type is bearer
+  target_token_header: str?                         # Header name for bearer token
+  target_token_prefix: str?                         # Prefix for bearer token (e.g., Bearer)
+  target_username: str?                             # Basic auth username
+  target_password: str?                             # Basic auth password
+  target_headers: str?                              # JSON string of custom headers when auth_type=headers
   interval_seconds: int                             # How often to refresh the image
   http_port: int                                    # Local HTTP port to serve the latest image
   screenshot_width: int                             # Rendered browser width in pixels
@@ -61,5 +59,3 @@ schema:
   tv_port: int                                      # TV API port (default 8002)
   tv_matte: str?                                    # Matte style name (optional)
   tv_show_after_upload: bool                        # Select the uploaded art immediately
-  tv_replace_last: bool                             # Replace last uploaded art instead of adding new
-  tv_last_art_file: str?                            # Path to cache last art ID (only if replace_last)

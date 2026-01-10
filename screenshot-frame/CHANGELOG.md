@@ -1,3 +1,7 @@
+## 0.1.6 (2026-01-10)
+
+- Auto-version bump
+
 ## 0.1.5 (2026-01-10)
 
 - Auto-version bump

@@ -1,20 +1,20 @@
 configuration:
-  image_provider_url:
-    name: Image provider URL
-    description: URL to fetch a PNG/JPEG or HTML (HTML will be rendered)
-  image_provider_auth_type:
-    name: Provider auth type
+  target_url:
+    name: Target URL
+    description: URL to screenshot (HTML page or image)
+  target_auth_type:
+    name: Target auth type
     description: none | bearer | basic | headers
-  image_provider_token:
+  target_token:
     name: Bearer token
     description: Used only when auth type is bearer
-  image_provider_username:
+  target_username:
     name: Basic auth username
     description: Used only when auth type is basic
-  image_provider_password:
+  target_password:
     name: Basic auth password
     description: Used only when auth type is basic
-  image_provider_headers:
+  target_headers:
     name: Custom headers (JSON)
     description: JSON map of headers (only when auth type is headers)
   interval_seconds:

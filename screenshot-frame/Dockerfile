@@ -31,16 +31,12 @@ RUN apk add --no-cache \
 # Ensure python and pip is up to date
 RUN python3 -m pip install --break-system-packages --upgrade pip setuptools wheel
 
-# Install websockets and samsung-tv-ws-api from default indexes
-RUN python3 -m pip install --break-system-packages --no-cache-dir \
-    'websockets==10.4' \
-    git+https://github.com/xchwarze/samsung-tv-ws-api.git
-
 # Configure pip to use PyPI (and HA wheels for musllinux where available)
 RUN mkdir -p ~/.pip && echo '[global]\nindex-url = https://pypi.org/simple/\nextra-index-url = https://wheels.home-assistant.io/musllinux-index/' > ~/.pip/pip.conf
 
-# Install pyppeteer for browser automation (Python port of Puppeteer)
-RUN python3 -m pip install --break-system-packages --no-cache-dir pyppeteer
+# Copy requirements.txt and install Python dependencies
+COPY requirements.txt /tmp/requirements.txt
+RUN python3 -m pip install --break-system-packages --no-cache-dir -r /tmp/requirements.txt
 
 # Create app and data directories
 RUN mkdir -p /app /data

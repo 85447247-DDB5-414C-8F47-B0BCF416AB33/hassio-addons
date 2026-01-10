@@ -16,16 +16,14 @@ Render Home Assistant dashboards (or any URL) with pyppeteer and send screenshot
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `image_provider_url` | URL to fetch image from (supports HTML rendering) | `http://homeassistant.local:5000/` |
-| `image_provider_auth_type` | Authentication type: `none`, `bearer`, `basic`, `headers` | `none` |
-| `image_provider_token` | Bearer token value | `""` |
-| `image_provider_token_header` | Header name for token | `Authorization` |
-| `image_provider_token_prefix` | Token prefix (e.g., "Bearer") | `Bearer` |
-| `image_provider_username` | Username for basic auth | `""` |
-| `image_provider_password` | Password for basic auth | `""` |
-| `image_provider_headers` | JSON map of custom headers | `""` |
-
-### Screenshot Settings
+| `target_url` | URL to screenshot (HTML page or image) | `http://homeassistant.local:5000/` |
+| `target_auth_type` | Authentication type: `none`, `bearer`, `basic`, `headers` | `none` |
+| `target_token` | Bearer token value | `""` |
+| `target_token_header` | Header name for token | `Authorization` |
+| `target_token_prefix` | Token prefix (e.g., "Bearer") | `Bearer` |
+| `target_username` | Username for basic auth | `""` |
+| `target_password` | Password for basic auth | `""` |
+| `target_headers` | JSON map of custom headers | `""` |
 
 | Option | Description | Default |
 |--------|-------------|---------|
@@ -68,9 +66,9 @@ Render Home Assistant dashboards (or any URL) with pyppeteer and send screenshot
 
 ```json
 {
-  "image_provider_url": "http://homeassistant.local:8123/lovelace/dashboard",
-  "image_provider_auth_type": "bearer",
-  "image_provider_token": "your_long_lived_access_token"
+  "target_url": "http://homeassistant.local:8123/lovelace/dashboard",
+  "target_auth_type": "bearer",
+  "target_token": "your_long_lived_access_token"
 }
 ```
 
@@ -78,10 +76,10 @@ Render Home Assistant dashboards (or any URL) with pyppeteer and send screenshot
 
 ```json
 {
-  "image_provider_url": "https://example.com/dashboard",
-  "image_provider_auth_type": "basic",
-  "image_provider_username": "user",
-  "image_provider_password": "pass"
+  "target_url": "https://example.com/dashboard",
+  "target_auth_type": "basic",
+  "target_username": "user",
+  "target_password": "pass"
 }
 ```
 
@@ -89,15 +87,15 @@ Render Home Assistant dashboards (or any URL) with pyppeteer and send screenshot
 
 ```json
 {
-  "image_provider_url": "https://api.example.com/image",
-  "image_provider_auth_type": "headers",
-  "image_provider_headers": "{\"X-API-Key\": \"your-key\", \"X-Custom\": \"value\"}"
+  "target_url": "https://api.example.com/image",
+  "target_auth_type": "headers",
+  "target_headers": "{\"X-API-Key\": \"your-key\", \"X-Custom\": \"value\"}"
 }
 ```
 
 ## How It Works
 
-1. Addon periodically fetches from `image_provider_url`
+1. Addon periodically fetches from `target_url`
 2. If HTML is detected, pyppeteer renders it with Chromium at the configured resolution and zoom
 3. Resulting image is uploaded to Samsung Frame TV via async WebSocket connection
 4. TV displays the image in art mode (if `tv_show_after_upload` is true)
