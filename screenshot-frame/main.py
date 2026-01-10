@@ -2,9 +2,13 @@ import os
 import asyncio
 import json
 import logging
+import warnings
 from datetime import datetime
 from aiohttp import web, ClientSession, BasicAuth
 from pathlib import Path
+
+# Suppress SSL warnings for local network devices
+warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 
 # pyppeteer for browser automation (Python port of Puppeteer)
 import pyppeteer
