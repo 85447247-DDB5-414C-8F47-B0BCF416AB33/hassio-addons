@@ -1,5 +1,5 @@
 name: Screenshot to Samsung Frame
-version: "0.1.20"
+version: "0.1.21"
 slug: screenshot-frame
 description: Periodically screenshots a Home Assistant dashboard and serves it for a Samsung Frame TV.
 startup: application
@@ -38,6 +38,7 @@ options:
   tv_port: 8002
   tv_matte: "none"
   tv_show_after_upload: false
+  tv_upload_timeout: 60
 schema:
   target_url: str                                   # URL to screenshot (HTML page or image)
   target_auth_type: list(none|bearer|basic|headers)
@@ -58,3 +59,4 @@ schema:
   tv_port: int                                      # TV API port (default 8002)
   tv_matte: str?                                    # Matte style name (optional)
   tv_show_after_upload: bool                        # Select the uploaded art immediately
+  tv_upload_timeout: int                            # Upload timeout in seconds (default 60)

@@ -56,3 +56,6 @@ configuration:
   tv_show_after_upload:
     name: Show after upload
     description: Select the uploaded art immediately
+  tv_upload_timeout:
+    name: TV upload timeout (seconds)
+    description: Maximum time to wait for TV upload operation (default 60)

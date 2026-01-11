@@ -48,6 +48,7 @@ TV_IP = os.environ.get('TV_IP') or ''
 TV_PORT = int(os.environ.get('TV_PORT', '8001'))
 TV_MATTE = os.environ.get('TV_MATTE') or None
 TV_SHOW_AFTER_UPLOAD = os.environ.get('TV_SHOW_AFTER_UPLOAD', 'true').lower() in ('1','true','yes')
+TV_UPLOAD_TIMEOUT = int(os.environ.get('TV_UPLOAD_TIMEOUT', '60'))  # seconds (default: 60s)
 TARGET_URL = os.environ.get('TARGET_URL') or ''
 # Target URL auth settings (supports multiple auth types)
 # TARGET_AUTH_TYPE: none|bearer|basic|headers
@@ -78,6 +79,7 @@ if TV_IP:
     logger.info(f'  TV IP: {TV_IP}:{TV_PORT}')
     logger.info(f'  TV Matte: {TV_MATTE if TV_MATTE else "none"}')
     logger.info(f'  TV Show After Upload: {TV_SHOW_AFTER_UPLOAD}')
+    logger.info(f'  TV Upload Timeout: {TV_UPLOAD_TIMEOUT}s')
 logger.info('='*60)
 
 async def upload_image_to_tv_async(host: str, port: int, image_path: str, matte: str = None, show: bool = True):
@@ -202,9 +204,16 @@ async def upload_image_to_tv_async(host: str, port: int, image_path: str, matte:
                 pass
             return None
 
-    # Run sync function in thread executor
+    # Run sync function in thread executor with timeout
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _sync_upload)
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, _sync_upload),
+            timeout=TV_UPLOAD_TIMEOUT
+        )
+    except asyncio.TimeoutError:
+        logger.info(f'[TV UPLOAD] ERROR: Upload timed out after {TV_UPLOAD_TIMEOUT}s')
+        return None
 
 
 # Global browser and page instances for persistent rendering
