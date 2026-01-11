@@ -94,6 +94,8 @@ async def upload_image_to_tv_async(host: str, port: int, image_path: str, matte:
         """Synchronous upload function to run in executor."""
         token_file = '/data/tv-token.txt'
         tv = None
+        # Create local copy of show parameter so we can modify it
+        local_show = show
         try:
             logger.info(f'[TV UPLOAD] Connecting to TV (token file: {token_file})')
             tv = SamsungTVArt(host=host, port=port, token_file=token_file)
@@ -112,7 +114,7 @@ async def upload_image_to_tv_async(host: str, port: int, image_path: str, matte:
             logger.info(f'[TV UPLOAD] Image size: {len(data)} bytes')
 
             file_type = os.path.splitext(image_path)[1][1:].upper() or 'JPEG'
-            logger.info(f'[TV UPLOAD] Uploading image (type={file_type}, matte={matte}, show={show})')
+            logger.info(f'[TV UPLOAD] Uploading image (type={file_type}, matte={matte}, show={local_show})')
             
             # Get cached ID for cleanup after upload
             last_id = None
@@ -145,17 +147,17 @@ async def upload_image_to_tv_async(host: str, port: int, image_path: str, matte:
                     # If TV is in art mode, force show=True to make the image display
                     # Check various possible return values: 'on', 'On', True, etc.
                     if art_mode_status and str(art_mode_status).lower() in ('on', 'true', '1'):
-                        show = True
+                        local_show = True
                         logger.info('[TV UPLOAD] TV is in art mode, forcing show=True')
                 except Exception as e:
                     logger.info(f'[TV UPLOAD] Could not check art mode status: {e}')
                 
-                logger.info(f'[TV UPLOAD] Attempting to select image on TV (show={show})')
+                logger.info(f'[TV UPLOAD] Attempting to select image on TV (show={local_show})')
                 selection_successful = False
                 try:
                     # Try to select with show parameter (controls whether image is displayed)
-                    tv.select_image(content_id, show=show)
-                    logger.info(f'[TV UPLOAD] ✓ Selected uploaded image on TV (show={show})')
+                    tv.select_image(content_id, show=local_show)
+                    logger.info(f'[TV UPLOAD] ✓ Selected uploaded image on TV (show={local_show})')
                     selection_successful = True
                 except TypeError:
                     # If show parameter not supported, try without it
