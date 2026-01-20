@@ -34,6 +34,8 @@ multidict==6.7.0
     # via
     #   aiohttp
     #   yarl
+paho-mqtt==2.1.0
+    # via -r requirements.in
 pillow==12.1.0
     # via -r requirements.in
 propcache==0.4.1
