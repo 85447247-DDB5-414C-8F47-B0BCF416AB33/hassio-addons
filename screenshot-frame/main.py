@@ -59,6 +59,7 @@ TV_PORT = int(os.environ.get('TV_PORT', '8001'))
 TV_MATTE = os.environ.get('TV_MATTE') or None
 TV_SHOW_AFTER_UPLOAD = os.environ.get('TV_SHOW_AFTER_UPLOAD', 'true').lower() in ('1','true','yes')
 TV_UPLOAD_TIMEOUT = int(os.environ.get('TV_UPLOAD_TIMEOUT', '60'))  # seconds (default: 60s)
+TV_DELETION_RETRY_MAX = int(os.environ.get('TV_DELETION_RETRY_MAX', '5'))  # Max retries for deletion (default: 5)
 TARGET_URL = os.environ.get('TARGET_URL') or ''
 # Target URL auth settings (supports multiple auth types)
 # TARGET_AUTH_TYPE: none|bearer|basic|headers
@@ -72,6 +73,7 @@ TARGET_HEADERS = os.environ.get('TARGET_HEADERS')  # optional JSON map of header
 
 # Always replace last art file (hard-coded path for persistence)
 TV_LAST_ART_FILE = '/data/last-art-id.txt'
+TV_DELETION_RETRY_FILE = '/data/tv-deletion-retry.json'  # Track deletion retries
 
 # MQTT configuration (optional Home Assistant integration)
 MQTT_ENABLED = os.environ.get('MQTT_ENABLED', 'false').lower() in ('1','true','yes')
@@ -98,12 +100,59 @@ if DEBUG_LOGGING:
         logger.info(f'  TV Matte: {TV_MATTE if TV_MATTE else "none"}')
         logger.info(f'  TV Show After Upload: {TV_SHOW_AFTER_UPLOAD}')
         logger.info(f'  TV Upload Timeout: {TV_UPLOAD_TIMEOUT}s')
+        logger.info(f'  TV Deletion Max Retries: {TV_DELETION_RETRY_MAX}')
     logger.info(f'  Debug Logging: {DEBUG_LOGGING}')
     logger.info(f'  MQTT: {"ENABLED" if MQTT_ENABLED else "DISABLED"}')
     if MQTT_ENABLED:
         logger.info(f'  MQTT Broker: {MQTT_BROKER}:{MQTT_PORT}')
         logger.info(f'  MQTT Topic Base: {MQTT_TOPIC_BASE}')
     logger.info('='*60)
+
+
+def _load_deletion_retry_state():
+    """Load deletion retry state from persistent file."""
+    try:
+        if os.path.exists(TV_DELETION_RETRY_FILE):
+            with open(TV_DELETION_RETRY_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        logger.debug(f'[TV RETRY] Could not load deletion retry state: {e}')
+    return {}
+
+
+def _save_deletion_retry_state(state: dict):
+    """Save deletion retry state to persistent file."""
+    try:
+        with open(TV_DELETION_RETRY_FILE, 'w') as f:
+            json.dump(state, f)
+        logger.debug(f'[TV RETRY] Saved deletion retry state: {state}')
+    except Exception as e:
+        logger.warning(f'[TV RETRY] Could not save deletion retry state: {e}')
+
+
+def _increment_deletion_retry(image_id: str):
+    """Increment retry counter for an image ID."""
+    state = _load_deletion_retry_state()
+    current_retries = state.get(image_id, 0)
+    state[image_id] = current_retries + 1
+    _save_deletion_retry_state(state)
+    return state[image_id]
+
+
+def _should_retry_deletion(image_id: str) -> bool:
+    """Check if we should retry deleting an image ID."""
+    state = _load_deletion_retry_state()
+    retries = state.get(image_id, 0)
+    return retries < TV_DELETION_RETRY_MAX
+
+
+def _clear_deletion_retry(image_id: str):
+    """Clear retry counter for an image ID (after successful deletion)."""
+    state = _load_deletion_retry_state()
+    if image_id in state:
+        del state[image_id]
+        _save_deletion_retry_state(state)
+
 
 async def upload_image_to_tv_async(host: str, port: int, image_path: str, matte: str = None, show: bool = True):
     """Upload image to Samsung TV using sync library in executor."""
@@ -166,19 +215,22 @@ async def upload_image_to_tv_async(host: str, port: int, image_path: str, matte:
             logger.debug(f'[TV UPLOAD] Upload returned id: {content_id}')
             if content_id is not None:
                 # Check if TV is in art mode - if so, force show=True so image actually displays
+                tv_in_art_mode = False
                 try:
                     art_mode_status = tv.get_artmode()
                     logger.debug(f'[TV UPLOAD] TV art mode status: {art_mode_status} (type: {type(art_mode_status).__name__})')
-                    # If TV is in art mode, force show=True to make the image display
                     # Check various possible return values: 'on', 'On', True, etc.
                     if art_mode_status and str(art_mode_status).lower() in ('on', 'true', '1'):
+                        tv_in_art_mode = True
                         local_show = True
                         logger.debug('[TV UPLOAD] TV is in art mode, forcing show=True')
                 except Exception as e:
                     logger.debug(f'[TV UPLOAD] Could not check art mode status: {e}')
                 
-                logger.debug(f'[TV UPLOAD] Attempting to select image on TV (show={local_show})')
+                # Try to select image (may fail if TV is busy/not in art mode, but we still delete old images)
                 selection_successful = False
+                selection_error = None
+                logger.debug(f'[TV UPLOAD] Attempting to select image on TV (show={local_show}, art_mode={tv_in_art_mode})')
                 try:
                     # Try to select with show parameter (controls whether image is displayed)
                     tv.select_image(content_id, show=local_show)
@@ -191,28 +243,59 @@ async def upload_image_to_tv_async(host: str, port: int, image_path: str, matte:
                         logger.debug('[TV UPLOAD] ✓ Selected uploaded image on TV (without show parameter)')
                         selection_successful = True
                     except Exception as e:
-                        logger.error(f'[TV UPLOAD] ERROR: Failed to select uploaded image: {e}')
+                        selection_error = str(e)
+                        logger.warning(f'[TV UPLOAD] WARNING: Failed to select uploaded image: {e}')
+                        logger.warning('[TV UPLOAD] Image will be available in TV gallery, but not currently displayed')
                 except Exception as e:
-                    logger.error(f'[TV UPLOAD] ERROR: Failed to select uploaded image: {e}')
+                    selection_error = str(e)
+                    logger.warning(f'[TV UPLOAD] WARNING: Failed to select uploaded image: {e}')
+                    logger.warning('[TV UPLOAD] Image will be available in TV gallery, but not currently displayed')
 
-                # Delete old art only after new art is successfully selected
-                if selection_successful and last_id and last_id != content_id:
-                    try:
-                        logger.debug(f'[TV UPLOAD] Deleting previous art entry: {last_id}')
-                        tv.delete(last_id)
-                        logger.debug('[TV UPLOAD] ✓ Previous art deleted')
-                    except Exception as e:
-                        logger.warning(f'[TV UPLOAD] Warning: Failed to delete previous art: {e}')
+                # IMPORTANT: Delete old art regardless of selection success
+                # This ensures cleanup even if TV was busy/not in art mode during selection
+                deletion_successful = False
+                if last_id and last_id != content_id:
+                    if _should_retry_deletion(last_id):
+                        try:
+                            retry_count = _increment_deletion_retry(last_id)
+                            logger.info(f'[TV UPLOAD] Attempting to delete previous art entry: {last_id} (attempt {retry_count}/{TV_DELETION_RETRY_MAX})')
+                            tv.delete(last_id)
+                            logger.info('[TV UPLOAD] ✓ Previous art successfully deleted')
+                            _clear_deletion_retry(last_id)  # Clear retry counter on success
+                            deletion_successful = True
+                        except Exception as e:
+                            logger.error(f'[TV UPLOAD] ERROR: Failed to delete previous art (ID: {last_id}): {e}')
+                            logger.warning(f'[TV UPLOAD] Will retry deletion on next sync cycle (attempts remaining: {TV_DELETION_RETRY_MAX - _load_deletion_retry_state().get(last_id, 0)})')
+                    else:
+                        logger.error(f'[TV UPLOAD] ERROR: Max deletion retry attempts ({TV_DELETION_RETRY_MAX}) exceeded for image ID: {last_id}')
+                        logger.warning('[TV UPLOAD] This image may accumulate on TV storage. Manual cleanup may be needed.')
+                        try:
+                            _clear_deletion_retry(last_id)  # Clear to avoid repeated warnings
+                        except Exception:
+                            pass
+                elif last_id and last_id == content_id:
+                    logger.debug(f'[TV UPLOAD] New image ID matches cached ID ({content_id}), no deletion needed')
+                    _clear_deletion_retry(last_id)  # Clear retry counter since no deletion needed
+                    deletion_successful = True
+                elif not last_id:
+                    logger.debug('[TV UPLOAD] No previous cached image ID; nothing to delete')
+                    deletion_successful = True
 
             tv.close()
             logger.debug('[TV UPLOAD] TV connection closed')
 
-            # Persist last art id for future replace attempts (only if selection was successful)
+            # Persist last art id for future cleanup attempts
             try:
-                if content_id and selection_successful:
+                # Always save the new ID if we got one, regardless of selection/deletion status
+                # This ensures we have it for cleanup purposes
+                if content_id:
                     with open(TV_LAST_ART_FILE, 'w') as lf:
                         lf.write(str(content_id))
                     logger.debug(f'[TV UPLOAD] ✓ Cached art ID {content_id} to {TV_LAST_ART_FILE}')
+                    if not selection_successful:
+                        logger.warning(f'[TV UPLOAD] Note: Image selection failed (TV may be busy/not in art mode), but image is cached for future display')
+                        if selection_error:
+                            logger.debug(f'[TV UPLOAD] Selection error: {selection_error}')
             except Exception as e:
                 logger.warning(f'[TV UPLOAD] Warning: Failed to cache art ID: {e}')
 
@@ -237,6 +320,85 @@ async def upload_image_to_tv_async(host: str, port: int, image_path: str, matte:
     except asyncio.TimeoutError:
         logger.info(f'[TV UPLOAD] ERROR: Upload timed out after {TV_UPLOAD_TIMEOUT}s')
         return None
+
+
+async def cleanup_stale_images_async(host: str, port: int):
+    """Attempt to cleanup any orphaned/stale image IDs from previous failed uploads."""
+    logger.info('[TV CLEANUP] Attempting to cleanup stale images from TV')
+    
+    try:
+        from samsungtvws import SamsungTVArt
+    except Exception as e:
+        logger.error(f'[TV CLEANUP] ERROR: samsungtvws library not available: {e}')
+        return False
+
+    def _sync_cleanup():
+        """Synchronous cleanup function to run in executor."""
+        token_file = '/data/tv-token.txt'
+        tv = None
+        try:
+            logger.debug(f'[TV CLEANUP] Connecting to TV for cleanup')
+            tv = SamsungTVArt(host=host, port=port, token_file=token_file)
+            tv.open()
+
+            # Check if TV supports art mode
+            supported = tv.supported()
+            if not supported:
+                logger.debug('[TV CLEANUP] TV does not support art mode; skipping cleanup')
+                tv.close()
+                return False
+
+            # Try to delete cached stale image ID if it exists
+            if os.path.exists(TV_LAST_ART_FILE):
+                try:
+                    with open(TV_LAST_ART_FILE, 'r') as lf:
+                        stale_id = lf.read().strip() or None
+                    
+                    if stale_id:
+                        logger.info(f'[TV CLEANUP] Attempting to delete stale image: {stale_id}')
+                        try:
+                            tv.delete(stale_id)
+                            logger.info(f'[TV CLEANUP] ✓ Successfully deleted stale image: {stale_id}')
+                            # Clear the cache file since we successfully cleaned up
+                            try:
+                                os.remove(TV_LAST_ART_FILE)
+                                logger.debug('[TV CLEANUP] Cleared stale image cache file')
+                            except Exception:
+                                pass
+                            tv.close()
+                            return True
+                        except Exception as e:
+                            logger.warning(f'[TV CLEANUP] Could not delete stale image ({stale_id}): {e}')
+                            tv.close()
+                            return False
+                except Exception as e:
+                    logger.debug(f'[TV CLEANUP] Error reading stale image ID: {e}')
+                    tv.close()
+                    return False
+            else:
+                logger.debug('[TV CLEANUP] No stale image cache file found')
+                tv.close()
+                return False
+            
+        except Exception as e:
+            logger.error(f'[TV CLEANUP] ERROR: Exception during cleanup: {e}')
+            try:
+                if tv:
+                    tv.close()
+            except Exception:
+                pass
+            return False
+
+    # Run sync cleanup in thread executor with timeout
+    loop = asyncio.get_event_loop()
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, _sync_cleanup),
+            timeout=TV_UPLOAD_TIMEOUT
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f'[TV CLEANUP] Cleanup timed out after {TV_UPLOAD_TIMEOUT}s')
+        return False
 
 
 # Global browser and page instances for persistent rendering
@@ -670,11 +832,35 @@ async def handle_screenshot(request):
         return web.Response(status=500, text=f'Error: {e}')
 
 
+async def handle_cleanup(request):
+    """API endpoint: POST /cleanup - Manually cleanup stale images from TV."""
+    if not TV_IP:
+        return web.json_response({
+            'success': False,
+            'message': 'TV upload not configured (TV_IP not set)'
+        }, status=400)
+    
+    try:
+        logger.info('[API] Manual cleanup requested')
+        result = await cleanup_stale_images_async(TV_IP, TV_PORT)
+        return web.json_response({
+            'success': result,
+            'message': 'Cleanup completed' if result else 'Cleanup attempted but no stale images found or cleanup failed'
+        })
+    except Exception as e:
+        logger.error(f'[API] Error during cleanup: {e}')
+        return web.json_response({
+            'success': False,
+            'message': f'Error: {e}'
+        }, status=500)
+
+
 async def start_api_server():
     """Start the aiohttp web server for status/screenshot endpoints."""
     app = web.Application()
     app.router.add_get('/status', handle_status)
     app.router.add_get('/screenshot', handle_screenshot)
+    app.router.add_post('/cleanup', handle_cleanup)
     
     runner = web.AppRunner(app)
     await runner.setup()
@@ -686,6 +872,7 @@ async def start_api_server():
     logger.info(f'[API] Web server started on port {api_port}')
     logger.info(f'[API]   GET http://localhost:{api_port}/status - Sync status (JSON)')
     logger.info(f'[API]   GET http://localhost:{api_port}/screenshot - Current screenshot image')
+    logger.info(f'[API]   POST http://localhost:{api_port}/cleanup - Manually cleanup stale images from TV')
     
     return runner
 
@@ -699,6 +886,18 @@ async def async_main():
     
     # Initialize MQTT if enabled
     await _mqtt_connect()
+    
+    # Attempt to cleanup any stale images from previous failed uploads on startup
+    if TV_IP:
+        logger.info('[STARTUP] Attempting to cleanup any stale images from previous runs...')
+        try:
+            cleanup_success = await cleanup_stale_images_async(TV_IP, TV_PORT)
+            if cleanup_success:
+                logger.info('[STARTUP] ✓ Stale image cleanup completed successfully')
+            else:
+                logger.debug('[STARTUP] No stale images found or cleanup not needed')
+        except Exception as e:
+            logger.warning(f'[STARTUP] Warning: Cleanup attempt failed: {e}')
     
     screenshot_task = loop.create_task(screenshot_loop())
     api_runner = await start_api_server()
