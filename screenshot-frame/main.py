@@ -71,6 +71,10 @@ TARGET_USERNAME = os.environ.get('TARGET_USERNAME')
 TARGET_PASSWORD = os.environ.get('TARGET_PASSWORD')
 TARGET_HEADERS = os.environ.get('TARGET_HEADERS')  # optional JSON map of headers
 
+# Ingress support (Home Assistant Supervisor)
+INGRESS_ENABLED = os.environ.get('INGRESS', 'false').lower() in ('1','true','yes')
+INGRESS_PORT = int(os.environ.get('INGRESS_PORT', '8099'))
+
 # Always replace last art file (hard-coded path for persistence)
 TV_LAST_ART_FILE = '/data/last-art-id.txt'
 TV_DELETION_RETRY_FILE = '/data/tv-deletion-retry.json'  # Track deletion retries
@@ -106,6 +110,9 @@ if DEBUG_LOGGING:
     if MQTT_ENABLED:
         logger.info(f'  MQTT Broker: {MQTT_BROKER}:{MQTT_PORT}')
         logger.info(f'  MQTT Topic Base: {MQTT_TOPIC_BASE}')
+    logger.info(f'  Ingress Enabled: {INGRESS_ENABLED}')
+    if INGRESS_ENABLED:
+        logger.info(f'  Ingress Port: {INGRESS_PORT}')
     logger.info('='*60)
 
 
@@ -465,49 +472,23 @@ async def _ensure_browser(width: int, height: int):
     return _browser, _page
 
 
-async def render_url_with_pyppeteer(url: str, headers: dict | None = None, timeout: int = 30000, width: int = 1920, height: int = 1080, zoom: int = 100, skip_navigation: bool = False):
-    """Render the given URL to a PNG using pyppeteer and return bytes.
+async def _reset_browser():
+    """Close and clear the persistent browser instance.
 
-    Args:
-        zoom: Zoom percentage (100 = 100%, 150 = 150%, 50 = 50%)
-        skip_navigation: If True, skip page reload and just take a new screenshot (for auto-refreshing pages like DakBoard)
-
-    Uses persistent browser instance for faster subsequent renders.
+    This can be used when rendering starts failing or the browser
+    appears to hang.  The next call to :func:`_ensure_browser` will
+    create a fresh process.
     """
-    async with _page_lock:
-        browser, page = await _ensure_browser(width, height)
-        
-        # Set extra headers if provided (only on first load or when navigation isn't skipped)
-        if headers and not skip_navigation:
-            await page.setExtraHTTPHeaders(headers)
-        
-        # Navigate to URL - use 'networkidle2' to wait for most network activity to complete
-        # This waits until there are ≤2 network connections for 500ms (ideal for dynamic content)
-        if not skip_navigation:
-            logger.debug('[BROWSER] Navigating to URL...')
-            await page.goto(url, {'waitUntil': 'networkidle2', 'timeout': timeout})
-            
-            # Optional additional wait after network idle (configurable via SCREENSHOT_WAIT)
-            if SCREENSHOT_WAIT > 0:
-                await asyncio.sleep(SCREENSHOT_WAIT)
-        else:
-            logger.debug('[BROWSER] Skipping navigation (page auto-refreshes), taking new screenshot...')
-            # Still wait a moment for any auto-refresh content to settle
-            if SCREENSHOT_WAIT > 0:
-                await asyncio.sleep(SCREENSHOT_WAIT)
-        
-        # Apply zoom by scaling the page
-        if zoom != 100:
-            await page.evaluate(f'() => {{ document.body.style.zoom = "{zoom}%" }}')
-        
-        # Take screenshot
-        logger.debug('[BROWSER] Taking screenshot...')
-        screenshot = await page.screenshot({'fullPage': False})
-        logger.debug('[BROWSER] ✓ Screenshot captured')
-        
-        return screenshot
-
-
+    global _browser, _page
+    if _browser:
+        try:
+            await _browser.close()
+            logger.info('[BROWSER] Browser process closed')
+        except Exception as e:
+            logger.debug(f'[BROWSER] Error closing browser: {e}')
+    _browser = None
+    _page = None
+    logger.info('[BROWSER] Browser reset complete')
 def _on_mqtt_connect(client, userdata, flags, rc):
     """MQTT connect callback."""
     global _mqtt_connected, _main_loop
@@ -679,11 +660,15 @@ async def screenshot_loop():
     global _last_sync_time, _last_sync_success, _last_error
     loop_count = 0
     next_cycle_time = None
-    
+    consecutive_failures = 0
+
     while True:
         loop_count += 1
         cycle_start = asyncio.get_event_loop().time()
         logger.debug(f'\n[LOOP] ===== Cycle #{loop_count} started =====')
+        cycle_success = True  # assume success unless we hit an error
+        saved_art = False
+
         try:
             if not TARGET_URL:
                 logger.debug('[LOOP] Skipping fetch; TARGET_URL not set')
@@ -718,55 +703,93 @@ async def screenshot_loop():
                                     logger.debug('Target returned HTML; attempting pyppeteer render')
                                     # Skip navigation after first load if configured (for auto-refreshing pages)
                                     skip_nav = SCREENSHOT_SKIP_NAVIGATION and loop_count > 1
-                                    rendered = await render_url_with_pyppeteer(TARGET_URL, headers=headers, width=SCREENSHOT_WIDTH, height=SCREENSHOT_HEIGHT, zoom=SCREENSHOT_ZOOM, skip_navigation=skip_nav)
+                                    rendered = await render_url_with_pyppeteer(
+                                        TARGET_URL,
+                                        headers=headers,
+                                        width=SCREENSHOT_WIDTH,
+                                        height=SCREENSHOT_HEIGHT,
+                                        zoom=SCREENSHOT_ZOOM,
+                                        skip_navigation=skip_nav,
+                                    )
                                     if rendered:
                                         with open(str(ART_PATH), 'wb') as f:
                                             f.write(rendered)
+                                        saved_art = True
                                         logger.debug(f'Saved pyppeteer-rendered image to {ART_PATH}')
                                     else:
                                         # Fallback: save the raw response (likely HTML) for debugging
                                         with open(str(ART_PATH), 'wb') as f:
                                             f.write(content)
-                                        logger.warning(f'pyppeteer not available or failed; saved raw target response to {ART_PATH}')
+                                        logger.warning(
+                                            f'pyppeteer not available or failed; saved raw target response to {ART_PATH} (not marked as art)'
+                                        )
                                 else:
-                                    with open(str(ART_PATH), 'wb') as f:
-                                        f.write(content)
-                                    logger.debug(f'Saved image from target to {ART_PATH}')
+                                    # If content-type looks like an image, accept it. Otherwise save but don't mark as art.
+                                    if ctype.startswith('image/'):
+                                        with open(str(ART_PATH), 'wb') as f:
+                                            f.write(content)
+                                        saved_art = True
+                                        logger.debug(f'Saved image from target to {ART_PATH}')
+                                    else:
+                                        with open(str(ART_PATH), 'wb') as f:
+                                            f.write(content)
+                                        logger.warning(
+                                            f'Received non-image content-type "{ctype}"; saved to {ART_PATH} for debugging (not marked as art)'
+                                        )
                             else:
                                 logger.warning(f'Target URL returned status {resp.status}')
+                                cycle_success = False
+                                # Do not overwrite art on non-200 responses; keep previous art
                 except Exception as e:
-                    logger.error(f'Error fetching from target URL: {e}')
+                    # log full traceback to help diagnose blank error messages
+                    logger.error(f'Error fetching from target URL: {repr(e)}', exc_info=True)
                     async with _status_lock:
                         _last_error = str(e)
+                    cycle_success = False
         except Exception as e:
-            logger.error(f'Fetch loop error: {e}')
+            logger.error(f'Fetch loop error: {repr(e)}', exc_info=True)
             async with _status_lock:
                 _last_error = str(e)
+            cycle_success = False
 
         if TV_IP:
-            logger.debug(f'[LOOP] TV upload enabled, uploading to {TV_IP}:{TV_PORT}')
-            try:
-                content_id = await upload_image_to_tv_async(TV_IP, TV_PORT, str(ART_PATH), TV_MATTE, TV_SHOW_AFTER_UPLOAD)
-                if not content_id:
-                    logger.warning('[LOOP] WARNING: Async upload returned no id; upload may have failed')
-                    async with _status_lock:
-                        _last_sync_success = False
-                        _last_error = 'Upload returned no ID'
-                else:
-                    logger.debug(f'[LOOP] ✓ Upload complete with id: {content_id}')
-                    async with _status_lock:
-                        _last_sync_time = datetime.now()
-                        _last_sync_success = True
-                        _last_error = None
-                    await _mqtt_update_status()
-            except Exception as e:
-                logger.error(f'[LOOP] ERROR: Local TV upload error: {e}')
-                import traceback
-                traceback.print_exc()
+            if not saved_art:
+                logger.warning(
+                    '[LOOP] Skipping TV upload: no valid art saved this cycle (possible HTTP error or non-image response)'
+                )
                 async with _status_lock:
                     _last_sync_success = False
-                    _last_error = str(e)
+                    _last_error = 'No valid art saved from target URL'
                 await _mqtt_update_status()
+                cycle_success = False
+            else:
+                logger.debug(f'[LOOP] TV upload enabled, uploading to {TV_IP}:{TV_PORT}')
+                try:
+                    content_id = await upload_image_to_tv_async(
+                        TV_IP, TV_PORT, str(ART_PATH), TV_MATTE, TV_SHOW_AFTER_UPLOAD
+                    )
+                    if not content_id:
+                        logger.warning('[LOOP] WARNING: Async upload returned no id; upload may have failed')
+                        async with _status_lock:
+                            _last_sync_success = False
+                            _last_error = 'Upload returned no ID'
+                        cycle_success = False
+                    else:
+                        logger.debug(f'[LOOP] ✓ Upload complete with id: {content_id}')
+                        async with _status_lock:
+                            _last_sync_time = datetime.now()
+                            _last_sync_success = True
+                            _last_error = None
+                        await _mqtt_update_status()
+                except Exception as e:
+                    logger.error(f'[LOOP] ERROR: Local TV upload error: {e}')
+                    import traceback
+                    traceback.print_exc()
+                    async with _status_lock:
+                        _last_sync_success = False
+                        _last_error = str(e)
+                    await _mqtt_update_status()
+                    cycle_success = False
         else:
             logger.debug('[LOOP] TV upload disabled (use_local_tv=false or tv_ip not set)')
             # Still mark as success if just fetching (no TV upload)
@@ -776,6 +799,24 @@ async def screenshot_loop():
                     _last_sync_success = True
                     _last_error = None
                 await _mqtt_update_status()
+
+        # update consecutive failure count and perform recovery actions if necessary
+        if cycle_success:
+            consecutive_failures = 0
+        else:
+            consecutive_failures += 1
+            if consecutive_failures >= 3:
+                # after several failed cycles try to reset things to recover
+                logger.warning(
+                    '[LOOP] Several consecutive failures detected – resetting browser and TV state'
+                )
+                await _reset_browser()
+                # remove TV token to force re-auth on next upload
+                try:
+                    os.remove('/data/tv-token.txt')
+                except Exception:
+                    pass
+                consecutive_failures = 0
 
         # Calculate cycle duration and next cycle time
         cycle_end = asyncio.get_event_loop().time()
@@ -794,12 +835,18 @@ async def screenshot_loop():
         sleep_time = next_cycle_time - current_time
         
         if sleep_time > 0:
-            logger.debug(f'[LOOP] Cycle #{loop_count} complete in {cycle_duration:.1f}s. Sleeping {sleep_time:.1f}s until next cycle...')
+            logger.debug(
+                f'[LOOP] Cycle #{loop_count} complete in {cycle_duration:.1f}s. '
+                f'Sleeping {sleep_time:.1f}s until next cycle...'
+            )
             logger.debug(f'[LOOP] ===== Cycle #{loop_count} ended =====\n')
             await asyncio.sleep(sleep_time)
         else:
             # We're running behind schedule
-            logger.warning(f'[LOOP] WARNING: Cycle #{loop_count} took {cycle_duration:.1f}s (behind by {abs(sleep_time):.1f}s). Starting next cycle immediately...')
+            logger.warning(
+                f'[LOOP] WARNING: Cycle #{loop_count} took {cycle_duration:.1f}s '
+                f'(behind by {abs(sleep_time):.1f}s). Starting next cycle immediately...'
+            )
             logger.debug(f'[LOOP] ===== Cycle #{loop_count} ended =====\n')
             # Reset next_cycle_time to current time to avoid cascading delays
             next_cycle_time = current_time
@@ -1225,8 +1272,23 @@ async def handle_dashboard(request):
 
 
 async def start_api_server():
-    """Start the aiohttp web server for status/screenshot endpoints."""
-    app = web.Application()
+    """Start the aiohttp web server for status/screenshot endpoints.
+
+    If ingress is enabled we restrict incoming connections to the single
+    Home Assistant ingress gateway address and listen on the configured
+    ingress port.  Otherwise the server listens on the normal API port.
+    """
+
+    # middleware enforces ingress source IP when enabled
+    async def _ingress_middleware(request, handler):
+        if INGRESS_ENABLED:
+            remote = request.remote
+            # ingress gateway always originates from this address
+            if remote != '172.30.32.2':
+                return web.Response(status=403, text='Forbidden')
+        return await handler(request)
+
+    app = web.Application(middlewares=[_ingress_middleware])
     app.router.add_get('/', handle_dashboard)
     app.router.add_get('/status', handle_status)
     app.router.add_get('/screenshot', handle_screenshot)
@@ -1236,7 +1298,11 @@ async def start_api_server():
     runner = web.AppRunner(app)
     await runner.setup()
     
-    api_port = int(os.environ.get('API_PORT', '5000'))
+    # choose listening port based on whether ingress is enabled
+    if INGRESS_ENABLED:
+        api_port = INGRESS_PORT
+    else:
+        api_port = int(os.environ.get('API_PORT', '5000'))
     site = web.TCPSite(runner, '0.0.0.0', api_port)
     await site.start()
     

@@ -18,6 +18,13 @@ map:
   - backup:rw
   - media:rw
 host_network: true
+ingress: true
+
+# expose the built-in control dashboard via Supervisor's "Open Web UI" button
+webui:
+  port: 5000    # matches the default value of the API_PORT environment variable
+  path: /
+
 options:
   target_url: http://homeassistant.local:5000/
   target_auth_type: none
@@ -46,6 +53,8 @@ options:
   mqtt_username: ""
   mqtt_password: ""
   mqtt_topic_base: "homeassistant"
+  ingress: true
+  ingress_port: 8099
 schema:
   target_url: str                                   # URL to screenshot (HTML page or image)
   target_auth_type: list(none|bearer|basic|headers)
@@ -74,3 +83,6 @@ schema:
   mqtt_username: str?                               # MQTT username (optional)
   mqtt_password: str?                               # MQTT password (optional)
   mqtt_topic_base: str                              # MQTT topic base for discovery
+  api_port: int?                                    # API port for the control dashboard (default 5000)
+  ingress: bool?                                    # Enable Home Assistant ingress (default: true)
+  ingress_port: int?                                # Port to listen on when ingress is enabled (default: 8099)

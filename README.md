@@ -119,6 +119,40 @@ For fast refresh rates (60 seconds or less):
 - TV must be on the same network as Home Assistant
 - TV art mode must be supported and enabled
 
+
+## Local development & testing
+
+This repository contains one or more add-ons.  To test them locally you can
+use the official Home Assistant devcontainer, which runs Supervisor and a
+full Home Assistant instance with the local addons mounted in.  The steps are
+similar to those described in the [Home Assistant documentation](https://developers.home-assistant.io/docs/apps/testing):
+
+1. Install the [Remote - Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+   extension in VS Code.
+2. Open this folder in VS Code.  When prompted choose **Reopen in Container**
+   (or run “Rebuild and Reopen in Container” from the command palette).
+3. After the container starts you’ll have Supervisor/HA running; execute the
+   **Start Home Assistant** task (Terminal → Run Task) to bootstrap the
+   instance.
+4. Access the local Home Assistant instance at `http://localhost:7123/`; your
+   add-on(s) appear under **Local Add-ons**.  You can edit code and restart the
+   add-on from within the container, and logs are available via the Supervisor
+   UI.
+
+> **macOS / Colima users** – the container expects a Docker socket at
+> `/var/run/docker.sock`. Colima uses `~/.colima/default/docker.sock` instead;
+> the devcontainer config already mounts it but the file must exist before the
+> container is created (run `colima start`).  If you see
+> ````
+> failed to connect to the docker API at unix:///var/run/docker.sock
+> ````
+> then either symlink the Colima socket into `/var/run` or set
+> `DOCKER_HOST` inside the container to `unix://${HOME}/.colima/default/docker.sock`.
+>
+> **Buildx** – some Colima/Docker installations do not expose the `buildx`
+> plugin.  If you hit `docker: unknown command: docker buildx` install it with
+> `apt install docker-buildx` inside the container or run `docker buildx install`.
+
 ## Troubleshooting
 
 ### TV Not Connecting
