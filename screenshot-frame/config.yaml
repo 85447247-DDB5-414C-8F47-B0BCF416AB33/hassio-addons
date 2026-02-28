@@ -20,10 +20,6 @@ map:
 host_network: true
 ingress: true
 
-# expose the built-in control dashboard via Supervisor's "Open Web UI" button
-webui:
-  port: 5000    # matches the default value of the API_PORT environment variable
-  path: /
 
 options:
   target_url: http://homeassistant.local:5000/
