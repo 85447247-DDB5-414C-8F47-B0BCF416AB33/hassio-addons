@@ -489,6 +489,66 @@ async def _reset_browser():
     _browser = None
     _page = None
     logger.info('[BROWSER] Browser reset complete')
+
+
+async def render_url_with_pyppeteer(
+    url: str,
+    headers: dict | None = None,
+    width: int = SCREENSHOT_WIDTH,
+    height: int = SCREENSHOT_HEIGHT,
+    zoom: int = SCREENSHOT_ZOOM,
+    skip_navigation: bool = False,
+) -> bytes | None:
+    """Render a URL in the persistent pyppeteer browser and return
+    a screenshot as raw bytes.
+
+    The helper is intentionally simple; callers (the screenshot loop)
+    are responsible for saving the returned bytes to disk.  A lock is
+    used to prevent multiple concurrent renders from stepping on each
+    other.  If anything goes wrong the function returns ``None``.
+    """
+    global _page, _page_lock
+
+    async with _page_lock:
+        try:
+            browser, page = await _ensure_browser(width, height)
+            if not page:
+                logger.error('[BROWSER] render helper could not create page')
+                return None
+
+            # Apply extra headers if provided
+            if headers:
+                try:
+                    await page.setExtraHTTPHeaders(headers)
+                except Exception as e:
+                    logger.debug(f"[BROWSER] Failed to set headers: {e}")
+
+            # Navigate unless we're reusing the existing page view
+            if not skip_navigation:
+                try:
+                    await page.goto(url, {'waitUntil': 'networkidle2', 'timeout': 30000})
+                except Exception as e:
+                    logger.warning(f'[BROWSER] Navigation error: {e}')
+                    # continue and attempt screenshot anyway
+
+            # Apply zoom level via CSS if required
+            if zoom and zoom != 100:
+                try:
+                    await page.evaluate(f"document.body.style.zoom='{zoom}%'" )
+                except Exception as e:
+                    logger.debug(f"[BROWSER] Zoom evaluation failed: {e}")
+
+            # Optional extra wait after network idle
+            if SCREENSHOT_WAIT and SCREENSHOT_WAIT > 0:
+                await asyncio.sleep(SCREENSHOT_WAIT)
+
+            # Capture screenshot as JPEG
+            image_bytes = await page.screenshot({'type': 'jpeg', 'quality': 85})
+            return image_bytes
+
+        except Exception as e:
+            logger.error(f'[BROWSER] render_url_with_pyppeteer exception: {e}')
+            return None
 def _on_mqtt_connect(client, userdata, flags, rc):
     """MQTT connect callback."""
     global _mqtt_connected, _main_loop
@@ -1280,9 +1340,25 @@ async def start_api_server():
     """
 
     # middleware enforces ingress source IP when enabled
+    @web.middleware
     async def _ingress_middleware(request, handler):
+        # ``request`` should normally be an aiohttp.web.Request instance.
+        #  In earlier versions we accidentally registered an un-decorated
+        #  callable, which resulted in ``request`` being the Application
+        #  object (hence the AttributeError seen in the log).  Decorating
+        #  this function fixes the signature.
+
         if INGRESS_ENABLED:
+            # determine remote address in a way that's compatible with
+            # multiple aiohttp versions
             remote = request.remote
+            if not remote:
+                transport = request.transport
+                if transport:
+                    peer = transport.get_extra_info('peername')
+                    if peer and isinstance(peer, (list, tuple)) and len(peer) >= 1:
+                        remote = peer[0]
+
             # ingress gateway always originates from this address
             if remote != '172.30.32.2':
                 return web.Response(status=403, text='Forbidden')
