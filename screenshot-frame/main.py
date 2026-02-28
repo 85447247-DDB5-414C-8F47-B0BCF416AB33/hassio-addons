@@ -1241,7 +1241,9 @@ async def handle_dashboard(request):
         <script>
             async function fetchStatus() {
                 try {
-                    const response = await fetch('/status');
+                    // use a relative path so that ingress-proxied URLs work
+                    // (leading slash would send request to the HA root instead)
+                    const response = await fetch('status');
                     return await response.json();
                 } catch (e) {
                     return null;
@@ -1266,7 +1268,7 @@ async def handle_dashboard(request):
                 btn.innerHTML = '<span class="spinner"></span>Cleaning up...';
                 
                 try {
-                    const response = await fetch('/cleanup', { method: 'POST' });
+                    const response = await fetch('cleanup', { method: 'POST' });
                     const result = await response.json();
                     
                     if (result.success) {
@@ -1296,7 +1298,7 @@ async def handle_dashboard(request):
                 btn.innerHTML = '<span class="spinner"></span>Deleting all art...';
                 
                 try {
-                    const response = await fetch('/delete-all', { method: 'POST' });
+                    const response = await fetch('delete-all', { method: 'POST' });
                     const result = await response.json();
                     
                     if (result.success) {
