@@ -1,0 +1,7 @@
+- id: bump-screenshot-frame-version
+  name: Bump screenshot-frame version
+  entry: scripts/bump-version.sh
+  language: script
+  stages: [commit]
+  pass_filenames: false
+  always_run: true

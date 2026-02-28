@@ -1,0 +1,10 @@
+repos:
+  - repo: local
+    hooks:
+      - id: bump-screenshot-frame-version
+        name: Bump screenshot-frame version
+        entry: scripts/bump-version.sh
+        language: script
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
